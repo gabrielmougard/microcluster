@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/canonical/lxd/lxd/db/query"
@@ -39,13 +40,15 @@ const Pending Role = "PENDING"
 
 // InternalClusterMember represents the global database entry for a dqlite cluster member.
 type InternalClusterMember struct {
-	ID          int
-	Name        string `db:"primary=yes"`
-	Address     string
-	Certificate string
-	Schema      int
-	Heartbeat   time.Time
-	Role        Role
+	ID                    int
+	Name                  string `db:"primary=yes"`
+	Address               string
+	Certificate           string
+	Schema                int
+	InternalAPIExtensions string
+	ExternalAPIExtensions string
+	Heartbeat             time.Time
+	Role                  Role
 }
 
 // InternalClusterMemberFilter is used for filtering queries using generated methods.
@@ -67,6 +70,10 @@ func (c InternalClusterMember) ToAPI() (*internalTypes.ClusterMember, error) {
 		return nil, fmt.Errorf("Failed to parse certificate of database cluster member with address %q: %w", c.Address, err)
 	}
 
+	internalExtensions := strings.Split(c.InternalAPIExtensions, ",")
+	externalExtensions := strings.Split(c.ExternalAPIExtensions, ",")
+	extensions := append(internalExtensions, externalExtensions...)
+
 	return &internalTypes.ClusterMember{
 		ClusterMemberLocal: internalTypes.ClusterMemberLocal{
 			Name:        c.Name,
@@ -77,6 +84,7 @@ func (c InternalClusterMember) ToAPI() (*internalTypes.ClusterMember, error) {
 		SchemaVersion: c.Schema,
 		LastHeartbeat: c.Heartbeat,
 		Status:        internalTypes.MemberUnreachable,
+		Extensions:    extensions,
 	}, nil
 }
 
