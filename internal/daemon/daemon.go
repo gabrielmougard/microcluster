@@ -80,7 +80,7 @@ func NewDaemon(ctx context.Context, project string) *Daemon {
 }
 
 // Init initializes the Daemon with the given configuration, and starts the database.
-func (d *Daemon) Init(listenPort string, stateDir string, socketGroup string, extendedEndpoints []rest.Endpoint, schemaExtensions map[int]schema.Update, hooks *config.Hooks) error {
+func (d *Daemon) Init(listenPort string, stateDir string, socketGroup string, extendedEndpoints []rest.Endpoint, schemaExtensions map[int]schema.Update, apiExtensions []string, hooks *config.Hooks) error {
 	if stateDir == "" {
 		stateDir = os.Getenv(sys.StateDir)
 	}
@@ -100,7 +100,7 @@ func (d *Daemon) Init(listenPort string, stateDir string, socketGroup string, ex
 		return fmt.Errorf("Failed to initialize directory structure: %w", err)
 	}
 
-	err = d.init(listenPort, extendedEndpoints, schemaExtensions, hooks)
+	err = d.init(listenPort, extendedEndpoints, schemaExtensions, apiExtensions, hooks)
 	if err != nil {
 		return fmt.Errorf("Daemon failed to start: %w", err)
 	}
@@ -115,7 +115,7 @@ func (d *Daemon) Init(listenPort string, stateDir string, socketGroup string, ex
 	return nil
 }
 
-func (d *Daemon) init(listenPort string, extendedEndpoints []rest.Endpoint, schemaExtensions map[int]schema.Update, hooks *config.Hooks) error {
+func (d *Daemon) init(listenPort string, extendedEndpoints []rest.Endpoint, schemaExtensions map[int]schema.Update, apiExtensions []string, hooks *config.Hooks) error {
 	d.applyHooks(hooks)
 
 	var err error
@@ -126,6 +126,12 @@ func (d *Daemon) init(listenPort string, extendedEndpoints []rest.Endpoint, sche
 
 	// Initialize the extensions registry with the internal extensions.
 	d.Extensions, err = extensions.NewExtensionRegistry(true)
+	if err != nil {
+		return err
+	}
+
+	// Register the extensions passed at initialization.
+	err = d.Extensions.Register(apiExtensions)
 	if err != nil {
 		return err
 	}
