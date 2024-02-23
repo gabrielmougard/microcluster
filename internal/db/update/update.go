@@ -40,6 +40,7 @@ func NewSchema() *SchemaUpdateManager {
 	return &SchemaUpdateManager{
 		updates: map[int]schema.Update{
 			1: updateFromV0,
+			2: updateFromV1,
 		},
 	}
 }
@@ -121,6 +122,15 @@ CREATE TABLE internal_cluster_members (
 );
 `, CreateSchema)
 
+	_, err := tx.ExecContext(ctx, stmt)
+	return err
+}
+
+func updateFromV1(ctx context.Context, tx *sql.Tx) error {
+	stmt := `
+ALTER TABLE internal_cluster_members ADD COLUMN internal_api_extensions TEXT;
+ALTER TABLE internal_cluster_members ADD COLUMN external_api_extensions TEXT;
+`
 	_, err := tx.ExecContext(ctx, stmt)
 	return err
 }
