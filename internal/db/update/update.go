@@ -33,28 +33,33 @@ const dotGoTemplate = "package %s\n\n" +
 	"%s`\n"
 
 type SchemaUpdateManager struct {
-	updates map[int]schema.Update
+	overrides map[int]schema.Update
+	updates   map[int]schema.Update
 }
 
 func NewSchema() *SchemaUpdateManager {
 	return &SchemaUpdateManager{
+		overrides: map[int]schema.Update{
+			2: overrideUpdateFromV1, // If this override is executed before `updateFromV1`, we should not apply `updateFromV1`.
+		},
 		updates: map[int]schema.Update{
 			1: updateFromV0,
+			2: updateFromV1,
 		},
 	}
 }
 
 func (m *SchemaUpdateManager) Schema() *SchemaUpdate {
-	schema := NewFromMap(m.updates)
+	schema := NewFromMap(m.overrides, m.updates)
 	schema.Fresh("")
 	return schema
 }
 
 func (m *SchemaUpdateManager) AppendSchema(extensions map[int]schema.Update) {
 	currentVersion := len(m.updates)
-	schema := NewFromMap(extensions)
+	schema := NewFromMap(nil, extensions)
 	for _, extension := range schema.updates {
-		m.updates[currentVersion+1] = extension
+		m.updates[currentVersion+1] = extension.update
 		currentVersion = len(m.updates)
 	}
 }
@@ -67,7 +72,7 @@ func (m *SchemaUpdateManager) SchemaDotGo() error {
 		return fmt.Errorf("failed to open schema.go for writing: %w", err)
 	}
 
-	schema := NewFromMap(m.updates)
+	schema := NewFromMap(m.overrides, m.updates)
 
 	_, err = schema.Ensure(db)
 	if err != nil {
@@ -122,5 +127,89 @@ CREATE TABLE internal_cluster_members (
 `, CreateSchema)
 
 	_, err := tx.ExecContext(ctx, stmt)
+	return err
+}
+
+func updateFromV1(ctx context.Context, tx *sql.Tx) error {
+	stmt := `
+ALTER TABLE internal_cluster_members ADD COLUMN internal_api_extensions TEXT;
+ALTER TABLE internal_cluster_members ADD COLUMN external_api_extensions TEXT;
+`
+	_, err := tx.ExecContext(ctx, stmt)
+	return err
+}
+
+// This update is an override for the `updateFromV1` update.
+// If this override is executed before `updateFromV1`, we should not apply `updateFromV1`.
+//
+// This update is necessary when an already clustered node with schema version 1 is upgraded.
+// We need this update to execute before the SchemaUpdate internal 'check' function is called,
+// hence why these 'overrides' can be executed by `ExecuteUpdatesOverride` whenever necessary.
+// A lookup table will be updated to  keep track of which overrides have been executed to avoid
+// executing them again  or their associated update (in this case 'updateFromV1').
+func overrideUpdateFromV1(ctx context.Context, tx *sql.Tx) error {
+	// Check that `internal_api_extensions` and `external_api_extensions` columns existence.
+	stmt := `
+PRAGMA table_info('internal_cluster_members');
+`
+	rows, err := tx.QueryContext(ctx, stmt)
+	if err != nil {
+		return err
+	}
+
+	defer rows.Close()
+
+	apiExtensionsColumns := map[string]struct{}{"internal_api_extensions": {}, "external_api_extensions": {}}
+	l := len(apiExtensionsColumns)
+	c := 0
+	for rows.Next() {
+		var cid int
+		var name string
+		var ctype string
+		var notnull int
+		var dfltValue sql.NullString
+		var pk int
+		err = rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk)
+		if err != nil {
+			return err
+		}
+
+		_, ok := apiExtensionsColumns[name]
+		if ok {
+			c++
+		}
+	}
+
+	if c == l {
+		// If they exist, do nothing and return.
+		// Even if this 'update' did not do anything,
+		// executing it will avoid running 'updateFromV1' (which would have failed in this situation).
+		return nil
+	}
+
+	// If they don't all exist, copy the data from the old table to a new temporary table containing the new columns.
+	// Then, drop the old table and rename the new table to the old table's name.
+	stmt = `
+CREATE TABLE internal_cluster_members_new (
+	id                      INTEGER   PRIMARY  KEY    AUTOINCREMENT  NOT  NULL,
+	name                    TEXT      NOT      NULL,
+	address                 TEXT      NOT      NULL,
+	certificate             TEXT      NOT      NULL,
+	schema                  INTEGER   NOT      NULL,
+	heartbeat               DATETIME  NOT      NULL,
+	role                    TEXT      NOT      NULL,
+	internal_api_extensions TEXT,
+	external_api_extensions TEXT,
+	UNIQUE(name),
+	UNIQUE(certificate)
+);
+
+INSERT INTO internal_cluster_members_new (id, name, address, certificate, schema, heartbeat, role, internal_api_extensions, external_api_extensions)
+SELECT id, name, address, certificate, schema, heartbeat, role, NULL, NULL FROM internal_cluster_members;
+
+DROP TABLE internal_cluster_members;
+ALTER TABLE internal_cluster_members_new RENAME TO internal_cluster_members;
+`
+	_, err = tx.ExecContext(ctx, stmt)
 	return err
 }
