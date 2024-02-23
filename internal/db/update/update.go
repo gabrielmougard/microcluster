@@ -33,26 +33,31 @@ const dotGoTemplate = "package %s\n\n" +
 	"%s`\n"
 
 type SchemaUpdateManager struct {
-	updates map[int]schema.Update
+	preUpdates map[int]schema.Update
+	updates    map[int]schema.Update
 }
 
 func NewSchema() *SchemaUpdateManager {
 	return &SchemaUpdateManager{
+		preUpdates: map[int]schema.Update{
+			1: preUpdateFromV0,
+		},
 		updates: map[int]schema.Update{
 			1: updateFromV0,
+			2: updateFromV1,
 		},
 	}
 }
 
 func (m *SchemaUpdateManager) Schema() *SchemaUpdate {
-	schema := NewFromMap(m.updates)
+	schema := NewFromMap(m.preUpdates, m.updates)
 	schema.Fresh("")
 	return schema
 }
 
 func (m *SchemaUpdateManager) AppendSchema(extensions map[int]schema.Update) {
 	currentVersion := len(m.updates)
-	schema := NewFromMap(extensions)
+	schema := NewFromMap(nil, extensions)
 	for _, extension := range schema.updates {
 		m.updates[currentVersion+1] = extension
 		currentVersion = len(m.updates)
@@ -67,7 +72,7 @@ func (m *SchemaUpdateManager) SchemaDotGo() error {
 		return fmt.Errorf("failed to open schema.go for writing: %w", err)
 	}
 
-	schema := NewFromMap(m.updates)
+	schema := NewFromMap(m.preUpdates, m.updates)
 
 	_, err = schema.Ensure(db)
 	if err != nil {
@@ -121,6 +126,31 @@ CREATE TABLE internal_cluster_members (
 );
 `, CreateSchema)
 
+	_, err := tx.ExecContext(ctx, stmt)
+	return err
+}
+
+func preUpdateFromV0(ctx context.Context, tx *sql.Tx) error {
+	stmt := `
+CREATE TABLE internal_cluster_members_new (
+	id                      INTEGER   PRIMARY  KEY    AUTOINCREMENT  NOT  NULL,
+	name                    TEXT      NOT      NULL,
+	address                 TEXT      NOT      NULL,
+	certificate             TEXT      NOT      NULL,
+	schema                  INTEGER   NOT      NULL,
+	heartbeat               DATETIME  NOT      NULL,
+	role                    TEXT      NOT      NULL,
+	internal_api_extensions TEXT,
+	external_api_extensions TEXT,
+	UNIQUE(name),
+	UNIQUE(certificate)
+);
+
+INSERT INTO internal_cluster_members_new SELECT * FROM internal_cluster_members;
+
+DROP TABLE internal_cluster_members;
+ALTER TABLE internal_cluster_members_new RENAME TO internal_cluster_members;
+`
 	_, err := tx.ExecContext(ctx, stmt)
 	return err
 }
