@@ -398,7 +398,7 @@ func (d *Daemon) StartAPI(bootstrap bool, initConfig map[string]string, newConfi
 			Role:        cluster.Pending,
 		}
 
-		err = d.db.Bootstrap(d.project, d.address, clusterMember)
+		err = d.db.Bootstrap(d.Extensions, d.project, d.address, clusterMember)
 		if err != nil {
 			return err
 		}
@@ -418,12 +418,12 @@ func (d *Daemon) StartAPI(bootstrap bool, initConfig map[string]string, newConfi
 	}
 
 	if len(joinAddresses) != 0 {
-		err = d.db.Join(d.project, d.address, joinAddresses...)
+		err = d.db.Join(d.Extensions, d.project, d.address, joinAddresses...)
 		if err != nil {
 			return fmt.Errorf("Failed to join cluster: %w", err)
 		}
 	} else {
-		err = d.db.StartWithCluster(d.project, d.address, d.trustStore.Remotes().Addresses())
+		err = d.db.StartWithCluster(d.Extensions, d.project, d.address, d.trustStore.Remotes().Addresses())
 		if err != nil {
 			return fmt.Errorf("Failed to re-establish cluster connection: %w", err)
 		}
