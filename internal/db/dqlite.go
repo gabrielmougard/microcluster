@@ -109,6 +109,13 @@ func (db *DB) Bootstrap(extensions *extensions.Extensions, project string, addr 
 		return err
 	}
 
+	// Apply initial API extensions on the bootstrap node.
+	if extensions != nil {
+		internalAPIExtension, externalAPIExtensions := extensions.SerializeForDB()
+		clusterRecord.InternalAPIExtensions = internalAPIExtension
+		clusterRecord.ExternalAPIExtensions = externalAPIExtensions
+	}
+
 	err = db.Transaction(db.ctx, func(ctx context.Context, tx *sql.Tx) error {
 
 		_, err := cluster.CreateInternalClusterMember(ctx, tx, clusterRecord)
