@@ -12,14 +12,26 @@ import (
 	"github.com/canonical/lxd/lxd/db/query"
 	"github.com/canonical/lxd/lxd/db/schema"
 	"github.com/canonical/lxd/shared"
+	"github.com/canonical/lxd/shared/logger"
 )
 
+// UpdateWithMigrationIdx is a schema update with a migration index.
+// This is helpful to know if we need to apply an update or skip it
+// if its override has already been execute. An update has either 0 or 1
+// override.
+type UpdateWithMigrationIdx struct {
+	update       schema.Update
+	migrationIdx int
+}
+
 type SchemaUpdate struct {
-	updates []schema.Update // Ordered series of updates making up the schema
-	hook    schema.Hook     // Optional hook to execute whenever a update gets applied
-	fresh   string          // Optional SQL statement used to create schema from scratch
-	check   schema.Check    // Optional callback invoked before doing any update
-	path    string          // Optional path to a file containing extra queries to run
+	executedUpdatesOverride map[int]struct{}         // Set of pre-updates that have been executed
+	updatesOverride         []UpdateWithMigrationIdx // Ordered series of updates to run before the schema check
+	updates                 []UpdateWithMigrationIdx // Ordered series of updates making up the schema
+	hook                    schema.Hook              // Optional hook to execute whenever a update gets applied
+	fresh                   string                   // Optional SQL statement used to create schema from scratch
+	check                   schema.Check             // Optional callback invoked before doing any update
+	path                    string                   // Optional path to a file containing extra queries to run
 }
 
 // Fresh sets a statement that will be used to create the schema from scratch
@@ -39,6 +51,27 @@ func (s *SchemaUpdate) Check(check schema.Check) {
 
 func (s *SchemaUpdate) Version() int {
 	return len(s.updates)
+}
+
+// ExecuteUpdatesOverride applies the updates override to the database.
+func (s *SchemaUpdate) ExecuteUpdatesOverride(ctx context.Context, tx *sql.Tx) error {
+	for _, updateOverride := range s.updatesOverride {
+		_, executed := s.executedUpdatesOverride[updateOverride.migrationIdx]
+		if executed {
+			logger.Warnf("update override '%d' has already been executed", updateOverride.migrationIdx)
+			continue
+		}
+
+		err := updateOverride.update(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("failed to apply update override: %w", err)
+		}
+
+		// Mark the update override as executed.
+		s.executedUpdatesOverride[updateOverride.migrationIdx] = struct{}{}
+	}
+
+	return nil
 }
 
 // Ensure makes sure that the actual schema in the given database matches the
@@ -100,7 +133,7 @@ func (s *SchemaUpdate) Ensure(db *sql.DB) (int, error) {
 				return fmt.Errorf("cannot apply fresh schema: %w", err)
 			}
 		} else {
-			err = ensureUpdatesAreApplied(ctx, tx, current, s.updates, s.hook)
+			err = ensureUpdatesAreApplied(ctx, tx, current, s.updates, s.hook, s.executedUpdatesOverride)
 			if err != nil {
 				return err
 			}
@@ -190,7 +223,7 @@ ORDER BY name
 }
 
 // Apply any pending update that was not yet applied.
-func ensureUpdatesAreApplied(ctx context.Context, tx *sql.Tx, current int, updates []schema.Update, hook schema.Hook) error {
+func ensureUpdatesAreApplied(ctx context.Context, tx *sql.Tx, current int, updates []UpdateWithMigrationIdx, hook schema.Hook, executedUpdatesOverride map[int]struct{}) error {
 	if current > len(updates) {
 		return fmt.Errorf(
 			"schema version '%d' is more recent than expected '%d'",
@@ -203,7 +236,7 @@ func ensureUpdatesAreApplied(ctx context.Context, tx *sql.Tx, current int, updat
 	}
 
 	// Apply missing updates.
-	for _, update := range updates[current:] {
+	for _, updateWithIdx := range updates[current:] {
 		if hook != nil {
 			err := hook(ctx, current, tx)
 			if err != nil {
@@ -211,14 +244,20 @@ func ensureUpdatesAreApplied(ctx context.Context, tx *sql.Tx, current int, updat
 					"failed to execute hook (version %d): %v", current, err)
 			}
 		}
-		err := update(ctx, tx)
-		if err != nil {
-			return fmt.Errorf("failed to apply update %d: %w", current, err)
+
+		// If an update override has already been executed, skip the update.
+		_, overriden := executedUpdatesOverride[updateWithIdx.migrationIdx]
+		if !overriden {
+			err := updateWithIdx.update(ctx, tx)
+			if err != nil {
+				return fmt.Errorf("failed to apply update %d: %w", current, err)
+			}
 		}
+
 		current++
 
 		statement := `INSERT INTO schemas (version, updated_at) VALUES (?, strftime("%s"))`
-		_, err = tx.ExecContext(ctx, statement, current)
+		_, err := tx.ExecContext(ctx, statement, current)
 		if err != nil {
 			return fmt.Errorf("failed to insert version %d: %w", current, err)
 		}
@@ -306,7 +345,7 @@ SELECT COUNT(name) FROM sqlite_master WHERE type = 'table' AND name = 'schemas'
 // trigger the associated Update value. It's required that the minimum key in
 // the map is 1, and if key N is present then N-1 is present too, with N>1
 // (i.e. there are no missing versions).
-func NewFromMap(versionsToUpdates map[int]schema.Update) *SchemaUpdate {
+func NewFromMap(updatesOverride map[int]schema.Update, versionsToUpdates map[int]schema.Update) *SchemaUpdate {
 	// Collect all version keys.
 	versions := []int{}
 	for version := range versionsToUpdates {
@@ -317,17 +356,25 @@ func NewFromMap(versionsToUpdates map[int]schema.Update) *SchemaUpdate {
 	sort.Ints(versions)
 
 	// Build the updates slice.
-	updates := []schema.Update{}
+	updates := []UpdateWithMigrationIdx{}
+	overrides := []UpdateWithMigrationIdx{}
 	for i, version := range versions {
 		// Assert that we start from 1 and there are no gaps.
 		if version != i+1 {
 			panic(fmt.Sprintf("Updates map misses version %d", i+1))
 		}
 
-		updates = append(updates, versionsToUpdates[version])
+		override, ok := updatesOverride[version]
+		if ok {
+			overrides = append(overrides, UpdateWithMigrationIdx{update: override, migrationIdx: version})
+		}
+
+		updates = append(updates, UpdateWithMigrationIdx{update: versionsToUpdates[version], migrationIdx: version})
 	}
 
 	return &SchemaUpdate{
-		updates: updates,
+		executedUpdatesOverride: make(map[int]struct{}),
+		updatesOverride:         overrides,
+		updates:                 updates,
 	}
 }
