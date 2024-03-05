@@ -15,11 +15,12 @@ import (
 )
 
 type SchemaUpdate struct {
-	updates []schema.Update // Ordered series of updates making up the schema
-	hook    schema.Hook     // Optional hook to execute whenever a update gets applied
-	fresh   string          // Optional SQL statement used to create schema from scratch
-	check   schema.Check    // Optional callback invoked before doing any update
-	path    string          // Optional path to a file containing extra queries to run
+	preUpdates []schema.Update // Ordered series of updates to run before the schema check
+	updates    []schema.Update // Ordered series of updates making up the schema
+	hook       schema.Hook     // Optional hook to execute whenever a update gets applied
+	fresh      string          // Optional SQL statement used to create schema from scratch
+	check      schema.Check    // Optional callback invoked before doing any update
+	path       string          // Optional path to a file containing extra queries to run
 }
 
 // Fresh sets a statement that will be used to create the schema from scratch
@@ -77,6 +78,12 @@ func (s *SchemaUpdate) Ensure(db *sql.DB) (int, error) {
 			if len(versions) > 0 {
 				current = versions[len(versions)-1]
 			}
+		}
+
+		// Some database updates need to be run before we check the schema
+		err = ensurePreUpdates(ctx, tx, s.preUpdates)
+		if err != nil {
+			return err
 		}
 
 		if s.check != nil {
@@ -187,6 +194,24 @@ SELECT sql FROM sqlite_master WHERE
 ORDER BY name
 `
 	return query.SelectStrings(ctx, tx, statement)
+}
+
+// Apply any pending pre-update that was not yet applied.
+func ensurePreUpdates(ctx context.Context, tx *sql.Tx, preUpdates []schema.Update) error {
+	// If there are no preUpdates, there's nothing to do.
+	if len(preUpdates) == 0 {
+		return nil
+	}
+
+	// Apply missing preUpdates.
+	for i, preUpdate := range preUpdates {
+		err := preUpdate(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("failed to apply preUpdate %d: %w", i, err)
+		}
+	}
+
+	return nil
 }
 
 // Apply any pending update that was not yet applied.
@@ -306,28 +331,33 @@ SELECT COUNT(name) FROM sqlite_master WHERE type = 'table' AND name = 'schemas'
 // trigger the associated Update value. It's required that the minimum key in
 // the map is 1, and if key N is present then N-1 is present too, with N>1
 // (i.e. there are no missing versions).
-func NewFromMap(versionsToUpdates map[int]schema.Update) *SchemaUpdate {
-	// Collect all version keys.
-	versions := []int{}
-	for version := range versionsToUpdates {
-		versions = append(versions, version)
-	}
-
-	// Sort the versions,
-	sort.Ints(versions)
-
-	// Build the updates slice.
-	updates := []schema.Update{}
-	for i, version := range versions {
-		// Assert that we start from 1 and there are no gaps.
-		if version != i+1 {
-			panic(fmt.Sprintf("Updates map misses version %d", i+1))
+func NewFromMap(versionsToPreUpdates map[int]schema.Update, versionsToUpdates map[int]schema.Update) *SchemaUpdate {
+	buildUpdatesSlice := func(updatesFunc map[int]schema.Update) []schema.Update {
+		// Collect all version keys.
+		versions := []int{}
+		for version := range updatesFunc {
+			versions = append(versions, version)
 		}
 
-		updates = append(updates, versionsToUpdates[version])
+		// Sort the versions,
+		sort.Ints(versions)
+
+		// Build the updates slice.
+		updates := []schema.Update{}
+		for i, version := range versions {
+			// Assert that we start from 1 and there are no gaps.
+			if version != i+1 {
+				panic(fmt.Sprintf("Updates map misses version %d", i+1))
+			}
+
+			updates = append(updates, versionsToUpdates[version])
+		}
+
+		return updates
 	}
 
 	return &SchemaUpdate{
-		updates: updates,
+		preUpdates: buildUpdatesSlice(versionsToPreUpdates),
+		updates:    buildUpdatesSlice(versionsToUpdates),
 	}
 }
