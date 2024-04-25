@@ -81,32 +81,32 @@ func (db *DB) waitUpgrade(bootstrap bool, ext extensions.Extensions) error {
 		return nodeIsBehind, nil
 	}
 
-	checkAPIExtensions := func(currentAPIExtensions extensions.Extensions, clusterMemberAPIExtensions []extensions.Extensions) (otherNodesBehind bool, err error) {
-		logger.Warnf("Local API extensions: %v, cluster members API extensions: %v", currentAPIExtensions, clusterMemberAPIExtensions)
+	// checkAPIExtensions := func(currentAPIExtensions extensions.Extensions, clusterMemberAPIExtensions []cluster.InternalClusterMember) (otherNodesBehind bool, err error) {
+	// 	logger.Errorf("Local API extensions: %v, cluster members API extensions: %v", currentAPIExtensions, clusterMemberAPIExtensions)
 
-		nodeIsBehind := false
-		for _, extensions := range clusterMemberAPIExtensions {
-			if currentAPIExtensions.IsSameVersion(extensions) == nil {
-				// API extensions are equal, there's hope for the
-				// update. Let's check the next node.
-				continue
-			} else if extensions == nil || currentAPIExtensions.Version() > extensions.Version() {
-				// Our version is bigger, we should stop here
-				// and wait for other nodes to be upgraded and
-				// restarted.
-				nodeIsBehind = true
-				continue
-			} else {
-				// Another node has a version greater than ours
-				// and presumeably is waiting for other nodes
-				// to upgrade. Let's error out and shutdown
-				// since we need a greater version.
-				return false, fmt.Errorf("This node's API extensions are behind, please upgrade")
-			}
-		}
+	// 	nodeIsBehind := false
+	// 	for _, extensions := range clusterMemberAPIExtensions {
+	// 		if currentAPIExtensions.IsSameVersion(extensions.APIExtensions) == nil {
+	// 			// API extensions are equal, there's hope for the
+	// 			// update. Let's check the next node.
+	// 			continue
+	// 		} else if extensions.APIExtensions == nil || currentAPIExtensions.Version() > extensions.APIExtensions.Version() {
+	// 			// Our version is bigger, we should stop here
+	// 			// and wait for other nodes to be upgraded and
+	// 			// restarted.
+	// 			nodeIsBehind = true
+	// 			continue
+	// 		} else {
+	// 			// Another node has a version greater than ours
+	// 			// and presumeably is waiting for other nodes
+	// 			// to upgrade. Let's error out and shutdown
+	// 			// since we need a greater version.
+	// 			return false, fmt.Errorf("This node's API extensions are behind, please upgrade")
+	// 		}
+	// 	}
 
-		return nodeIsBehind, nil
-	}
+	// 	return nodeIsBehind, nil
+	// }
 
 	otherNodesBehind := false
 	newSchema := db.Schema()
@@ -153,32 +153,32 @@ func (db *DB) waitUpgrade(bootstrap bool, ext extensions.Extensions) error {
 			return err
 		}
 
-		if !bootstrap {
-			// Perform the API extensions check.
-			err = query.Transaction(context.TODO(), db.db, func(ctx context.Context, tx *sql.Tx) error {
-				err := cluster.UpdateClusterMemberAPIExtensions(tx, ext, db.listenAddr.URL.Host)
-				if err != nil {
-					return fmt.Errorf("Failed to update API extensions when joining cluster: %w", err)
-				}
+		// if !bootstrap {
+		// 	// Perform the API extensions check.
+		// 	err = query.Transaction(context.TODO(), db.db, func(ctx context.Context, tx *sql.Tx) error {
+		// 		err := cluster.UpdateClusterMemberAPIExtensions(tx, ext, db.listenAddr.URL.Host)
+		// 		if err != nil {
+		// 			return fmt.Errorf("Failed to update API extensions when joining cluster: %w", err)
+		// 		}
 
-				clusterMembersAPIExtensions, err := cluster.GetClusterMemberAPIExtensions(ctx, tx)
-				if err != nil {
-					return fmt.Errorf("Failed to get other members' API extensions: %w", err)
-				}
+		// 		clusterMembersAPIExtensions, err := cluster.GetClusterMemberAPIExtensions(ctx, tx)
+		// 		if err != nil {
+		// 			return fmt.Errorf("Failed to get other members' API extensions: %w", err)
+		// 		}
 
-				otherNodesBehindInternal, err := checkAPIExtensions(ext, clusterMembersAPIExtensions)
-				if err != nil {
-					return err
-				}
+		// 		otherNodesBehindInternal, err := checkAPIExtensions(ext, clusterMembersAPIExtensions)
+		// 		if err != nil {
+		// 			return err
+		// 		}
 
-				if otherNodesBehindInternal {
-					otherNodesBehind = true
-					return schema.ErrGracefulAbort
-				}
+		// 		if otherNodesBehindInternal {
+		// 			otherNodesBehind = true
+		// 			return schema.ErrGracefulAbort
+		// 		}
 
-				return nil
-			})
-		}
+		// 		return nil
+		// 	})
+		// }
 
 		return err
 	})
