@@ -155,30 +155,52 @@ func UpdateClusterMemberAPIExtensions(tx *sql.Tx, apiExtensions extensions.Exten
 
 // GetClusterMemberAPIExtensions returns the API extensions from all cluster members that are not pending.
 // This helper is non-generated to work before generated statements are loaded, as we update the API extensions.
-func GetClusterMemberAPIExtensions(ctx context.Context, tx *sql.Tx) ([]extensions.Extensions, error) {
-	query := "SELECT api_extensions FROM internal_cluster_members WHERE NOT role='pending'"
-	rows, err := tx.QueryContext(ctx, query)
-	if err != nil {
-		return nil, err
-	}
+func GetClusterMemberAPIExtensions(ctx context.Context, tx *sql.Tx) ([]InternalClusterMember, error) {
+	// query := "SELECT api_extensions FROM internal_cluster_members WHERE NOT role='pending'"
+	// rows, err := tx.QueryContext(ctx, query)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	defer rows.Close()
+	// defer rows.Close()
 
-	var results []extensions.Extensions
-	for rows.Next() {
-		var ext extensions.Extensions
-		err := rows.Scan(&ext)
+	// var results []extensions.Extensions
+	// for rows.Next() {
+	// 	var ext extensions.Extensions
+	// 	err := rows.Scan(&ext)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+
+	// 	results = append(results, ext)
+	// }
+
+	// err = rows.Err()
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// return results, nil
+
+	sql := "SELECT * FROM internal_cluster_members"
+	objects := make([]InternalClusterMember, 0)
+
+	dest := func(scan func(dest ...any) error) error {
+		i := InternalClusterMember{}
+		err := scan(&i.ID, &i.Name, &i.Address, &i.Certificate, &i.SchemaInternal, &i.SchemaExternal, &i.APIExtensions, &i.Heartbeat, &i.Role)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
-		results = append(results, ext)
+		objects = append(objects, i)
+
+		return nil
 	}
 
-	err = rows.Err()
+	err := query.Scan(ctx, tx, sql, dest)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Failed to fetch from \"internal_cluster_members\" table: %w", err)
 	}
 
-	return results, nil
+	return objects, nil
 }
