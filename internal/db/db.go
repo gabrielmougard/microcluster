@@ -81,16 +81,16 @@ func (db *DB) waitUpgrade(bootstrap bool, ext extensions.Extensions) error {
 		return nodeIsBehind, nil
 	}
 
-	checkAPIExtensions := func(currentAPIExtensions extensions.Extensions, clusterMemberAPIExtensions []extensions.Extensions) (otherNodesBehind bool, err error) {
+	checkAPIExtensions := func(currentAPIExtensions extensions.Extensions, clusterMemberAPIExtensions []cluster.InternalClusterMember) (otherNodesBehind bool, err error) {
 		logger.Warnf("Local API extensions: %v, cluster members API extensions: %v", currentAPIExtensions, clusterMemberAPIExtensions)
 
 		nodeIsBehind := false
 		for _, extensions := range clusterMemberAPIExtensions {
-			if currentAPIExtensions.IsSameVersion(extensions) == nil {
+			if currentAPIExtensions.IsSameVersion(extensions.APIExtensions) == nil {
 				// API extensions are equal, there's hope for the
 				// update. Let's check the next node.
 				continue
-			} else if extensions == nil || currentAPIExtensions.Version() > extensions.Version() {
+			} else if extensions.APIExtensions == nil || currentAPIExtensions.Version() > extensions.APIExtensions.Version() {
 				// Our version is bigger, we should stop here
 				// and wait for other nodes to be upgraded and
 				// restarted.
