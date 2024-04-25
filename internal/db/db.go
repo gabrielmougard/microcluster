@@ -161,6 +161,13 @@ func (db *DB) waitUpgrade(bootstrap bool, ext extensions.Extensions) error {
 					return fmt.Errorf("Failed to update API extensions when joining cluster: %w", err)
 				}
 
+				// TODO: to remove, just for debugging
+				members, err := cluster.GetInternalClusterMembers(ctx, tx)
+				if err != nil {
+					return err
+				}
+				logger.Errorf("GABRIEL - Members: %v", members)
+
 				clusterMembersAPIExtensions, err := cluster.GetClusterMemberAPIExtensions(ctx, tx)
 				if err != nil {
 					return fmt.Errorf("Failed to get other members' API extensions: %w", err)
